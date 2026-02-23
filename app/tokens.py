@@ -56,12 +56,16 @@ async def _refresh_with_refresh_token(refresh_token: str) -> dict:
     async with httpx.AsyncClient(timeout=30) as client:
         payload = {
             "grant_type": "refresh_token",
-            "refresh_token": refresh_token,
-            "client_id": CLIENT_ID,
+            "client_id": int(CLIENT_ID),
             "client_secret": CLIENT_SECRET,
-            "redirect_uri": REDIRECT_URI,
+            "refresh_token": refresh_token,
         }
-        r = await client.post(ME_TOKEN_ENDPOINT, data=payload)
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": settings.me_user_agent,
+        }
+        r = await client.post(ME_TOKEN_ENDPOINT, json=payload, headers=headers)
         r.raise_for_status()
         return r.json()
 
@@ -70,11 +74,16 @@ async def _exchange_code_for_token(code: str) -> dict:
         payload = {
             "grant_type": "authorization_code",
             "code": code,
-            "client_id": CLIENT_ID,
+            "client_id": int(CLIENT_ID),
             "client_secret": CLIENT_SECRET,
             "redirect_uri": REDIRECT_URI,
         }
-        r = await client.post(ME_TOKEN_ENDPOINT, data=payload)
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "User-Agent": settings.me_user_agent,
+        }
+        r = await client.post(ME_TOKEN_ENDPOINT, json=payload, headers=headers)
         r.raise_for_status()
         return r.json()
 
@@ -84,12 +93,19 @@ def _calc_expires_at(expires_in_seconds: int) -> str:
 async def ensure_valid_token(account_id: str = "default") -> TokenRow:
     tk = get_token(account_id)
     if not tk:
-        raise RuntimeError("Nenhum token salvo; rode o exchange_code para gerar.")
+        raise RuntimeError("Nenhum token salvo; rode o fluxo OAuth /oauth/callback para gerar.")
 
     if not _needs_refresh(tk):
         return tk
 
-    refreshed = await _refresh_with_refresh_token(tk["refresh_token"])
+    try:
+        refreshed = await _refresh_with_refresh_token(tk["refresh_token"])
+    except httpx.HTTPStatusError as e:
+        raise RuntimeError(
+            f"Falha ao renovar token (HTTP {e.response.status_code}): {e.response.text}. "
+            "Pode ser necessário refazer o fluxo OAuth."
+        ) from e
+
     new_row: TokenRow = {
         "account_id": account_id,
         "access_token": refreshed["access_token"],
